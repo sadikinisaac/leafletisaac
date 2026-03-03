@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Houston Flood Risk - River Time Series</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #app {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #map {
+            flex: 1;
+            min-height: 0;
+        }
+
+        #chartContainer {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chartInner {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+        }
+
+        #chartTitle {
+            margin: 0 0 8px 0;
+        }
+
+        #chartWrapper {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+        }
+        
+        .flood-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .flood-normal { background-color: #2ecc71; }
+        .flood-action { background-color: #f39c12; }
+        .flood-warning { background-color: #e67e22; }
+        .flood-moderate { background-color: #e74c3c; }
+        .flood-major { background-color: #c0392b; }
+        .flood-record { background-color: #8e44ad; }
+        
+        /* Custom markers for upstream/downstream */
+        .custom-div-icon {
+            background: transparent;
+            border: none;
+        }
+        
+        .upstream-marker {
+            background-color: #27ae60;
+            color: white;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            white-space: nowrap;
+        }
+        
+        .downstream-marker {
+            background-color: #e67e22;
+            color: white;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            white-space: nowrap;
+        }
+        
+        .river-name-marker {
+            background-color: #3498db;
+            color: white;
+            font-weight: bold;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            white-space: nowrap;
+        }
+        
+        .arrow-marker {
+            font-size: 24px;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            transform: rotate(0deg);
+            display: inline-block;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div id="map"></div>
+
+        <div id="chartContainer">
+            <div id="chartInner">
+                <h3 id="chartTitle">Select a river gauge</h3>
+                <div id="floodLegend" style="margin-bottom: 10px; font-size: 12px;">
+                    <span><span class="flood-indicator flood-normal"></span>Normal</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-action"></span>Action</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-warning"></span>Warning</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-moderate"></span>Moderate</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-major"></span>Major</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-record"></span>Record</span>
+                </div>
+                <div style="margin-bottom: 5px; font-size: 11px; color: #666;">
+                    <span style="color: #27ae60;">⬆️ UPSTREAM</span> → 
+                    <span style="color: #3498db;">RIVER FLOW</span> → 
+                    <span style="color: #e67e22;">⬇️ DOWNSTREAM</span>
+                </div>
+                <div id="chartWrapper">
+                    <canvas id="riverChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ------------------------------------------
+        1. MAP SETUP (SATELLITE BASEMAP)
+        ------------------------------------------ */
+
+        var map = L.map("map").setView([29.76, -95.37], 10);
+
+        // Esri World Imagery (satellite)
+        L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/" +
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            {
+                attribution: "Esri"
+            }
+        ).addTo(map);
+
+        var currentChart = null;
+        
+        // Flood level thresholds for different gauges (in feet)
+        var floodLevels = {
+            // Brays Bayou
+            "08075000": {
+                action: 38,
+                warning: 42,
+                moderate: 46,
+                major: 50,
+                record: 54.3
+            },
+            // White Oak Bayou
+            "08074500": {
+                action: 20,
+                warning: 24,
+                moderate: 28,
+                major: 32,
+                record: 35.2
+            },
+            // Buffalo Bayou
+            "08076000": {
+                action: 22,
+                warning: 26,
+                moderate: 30,
+                major: 34,
+                record: 37.5
+            },
+            // Greens Bayou
+            "08073500": {
+                action: 55,
+                warning: 60,
+                moderate: 65,
+                major: 70,
+                record: 74.8
+            },
+            // San Jacinto River
+            "08068000": {
+                action: 45,
+                warning: 50,
+                moderate: 55,
+                major: 60,
+                record: 65.2
+            },
+            // East Fork San Jacinto
+            "08068500": {
+                action: 70,
+                warning: 75,
+                moderate: 80,
+                major: 85,
+                record: 89.3
+            },
+            // Default thresholds
+            "default": {
+                action: 10,
+                warning: 15,
+                moderate: 20,
+                major: 25,
+                record: 30
+            }
+        };
+
+        /* ------------------------------------------
+        2. RIVER NETWORK DATA WITH VISIBLE MARKERS
+        ------------------------------------------ */
+        
+        var riverNetworks = [
+            {
+                name: "Brays Bayou",
+                color: "#3498db",
+                points: [
+                    [29.70, -95.60], // Upstream (west)
+                    [29.71, -95.55],
+                    [29.72, -95.50],
+                    [29.73, -95.45],
+                    [29.72, -95.40],
+                    [29.71, -95.35],
+                    [29.70, -95.30]  // Downstream (east)
+                ],
+                gauges: [
+                    { id: "08075000", name: "Brays Bayou at Houston", lat: 29.72, lon: -95.38 }
+                ]
+            },
+            {
+                name: "Buffalo Bayou",
+                color: "#3498db",
+                points: [
+                    [29.75, -95.70], // Upstream (west)
+                    [29.76, -95.65],
+                    [29.77, -95.60],
+                    [29.76, -95.55],
+                    [29.75, -95.50],
+                    [29.74, -95.45],
+                    [29.73, -95.40],
+                    [29.72, -95.35]  // Downstream (east)
+                ],
+                gauges: [
+                    { id: "08076000", name: "Buffalo Bayou near Houston", lat: 29.76, lon: -95.37 }
+                ]
+            },
+            {
+                name: "White Oak Bayou",
+                color: "#3498db",
+                points: [
+                    [29.80, -95.55], // Upstream (northwest)
+                    [29.81, -95.50],
+                    [29.80, -95.45],
+                    [29.79, -95.40],
+                    [29.78, -95.38]  // Downstream (southeast)
+                ],
+                gauges: [
+                    { id: "08074500", name: "White Oak Bayou at Houston", lat: 29.78, lon: -95.40 }
+                ]
+            },
+            {
+                name: "Greens Bayou",
+                color: "#3498db",
+                points: [
+                    [29.88, -95.35], // Upstream (north)
+                    [29.87, -95.32],
+                    [29.86, -95.30],
+                    [29.85, -95.28],
+                    [29.84, -95.25]  // Downstream (south)
+                ],
+                gauges: [
+                    { id: "08073500", name: "Greens Bayou near Houston", lat: 29.85, lon: -95.25 }
+                ]
+            },
+            {
+                name: "San Jacinto River",
+                color: "#3498db",
+                points: [
+                    [30.10, -95.20], // Upstream (north)
+                    [30.05, -95.18],
+                    [30.00, -95.16],
+                    [29.95, -95.14],
+                    [29.90, -95.12],
+                    [29.87, -95.10]  // Downstream (south)
+                ],
+                gauges: [
+                    { id: "08068500", name: "East Fork San Jacinto", lat: 30.15, lon: -95.20 },
+                    { id: "08068000", name: "San Jacinto River", lat: 29.87, lon: -95.13 }
+                ]
+            }
+        ];
+
+        /* ------------------------------------------
+        3. DRAW RIVER WITH VISIBLE MARKERS
+        ------------------------------------------ */
+        
+        function drawRiverNetworks() {
+            riverNetworks.forEach(function(river) {
+                // Draw the river line
+                L.polyline(river.points, {
+                    color: river.color,
+                    weight: 4,
+                    opacity: 0.8
+                }).addTo(map);
+                
+                // Add river name label in the middle
+                var midIndex = Math.floor(river.points.length / 2);
+                var midPoint = river.points[midIndex];
+                
+                L.marker(midPoint, {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: '<div class="river-name-marker">' + river.name + '</div>',
+                        iconSize: [100, 30],
+                        iconAnchor: [50, 15]
+                    })
+                }).addTo(map);
+                
+                // Add UPSTREAM label at first point
+                L.marker(river.points[0], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: '<div class="upstream-marker">⬆️ UPSTREAM</div>',
+                        iconSize: [100, 30],
+                        iconAnchor: [50, 15]
+                    })
+                }).addTo(map);
+                
+                // Add DOWNSTREAM label at last point
+                var lastIndex = river.points.length - 1;
+                L.marker(river.points[lastIndex], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: '<div class="downstream-marker">⬇️ DOWNSTREAM</div>',
+                        iconSize: [110, 30],
+                        iconAnchor: [55, 15]
+                    })
+                }).addTo(map);
+                
+                // Add direction arrows along the river
+                for (var i = 0; i < river.points.length - 1; i++) {
+                    var start = river.points[i];
+                    var end = river.points[i + 1];
+                    
+                    // Calculate midpoint for arrow
+                    var midLat = (start[0] + end[0]) / 2;
+                    var midLng = (start[1] + end[1]) / 2;
+                    
+                    // Calculate angle for arrow direction
+                    var dx = end[1] - start[1];
+                    var dy = end[0] - start[0];
+                    var angle = Math.atan2(dy, dx) * 180 / Math.PI;
+                    
+                    // Add arrow marker
+                    L.marker([midLat, midLng], {
+                        icon: L.divIcon({
+                            className: 'custom-div-icon',
+                            html: '<div class="arrow-marker" style="transform: rotate(' + angle + 'deg);">➡️</div>',
+                            iconSize: [30, 30],
+                            iconAnchor: [15, 15]
+                        })
+                    }).addTo(map);
+                }
+            });
+        }
+
+        /* ------------------------------------------
+        4. FETCH GAUGES
+        ------------------------------------------ */
+
+        var bbox = "-95.9,29.4,-94.9,30.1";
+
+        var sitesUrl = "https://waterservices.usgs.gov/nwis/site/?" +
+            "format=rdb&parameterCd=00065&bBox=" + bbox;
+
+        // Draw river networks first
+        drawRiverNetworks();
+
+        // Sample current levels for demo
+        var currentLevels = {
+            "08075000": 43.2,
+            "08074500": 22.5,
+            "08076000": 24.8,
+            "08073500": 68.3,
+            "08068000": 48.7,
+            "08068500": 72.1
+        };
+
+        fetch(sitesUrl, {
+            headers: {
+                'User-Agent': 'Houston-Flood-Map/1.0'
+            }
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('USGS service returned ' + response.status);
+            }
+            return response.text();
+        })
+        .then(function(text) {
+            var lines = text.split("\n");
+            var siteCount = 0;
+            
+            for (var i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith("USGS") && !lines[i].startsWith("#")) {
+                    var parts = lines[i].split("\t");
+                    
+                    if (parts.length >= 6) {
+                        var siteId = parts[1];
+                        var siteName = parts[2];
+                        var lat = parseFloat(parts[4]);
+                        var lon = parseFloat(parts[5]);
+                        
+                        if (!isNaN(lat) && !isNaN(lon)) {
+                            addGaugeMarker(siteId, siteName, lat, lon);
+                            siteCount++;
+                        }
+                    }
+                }
+            }
+            
+            if (siteCount === 0) {
+                console.log("No sites found from USGS, using fallback gauges");
+                useFallbackGauges();
+            }
+        })
+        .catch(function(error) {
+            console.log("USGS fetch failed, using fallback gauges");
+            useFallbackGauges();
+        });
+
+        function useFallbackGauges() {
+            var fallbackGauges = [
+                { id: "08075000", name: "Brays Bayou at Houston", lat: 29.72, lon: -95.38 },
+                { id: "08074500", name: "White Oak Bayou at Houston", lat: 29.78, lon: -95.40 },
+                { id: "08076000", name: "Buffalo Bayou near Houston", lat: 29.76, lon: -95.37 },
+                { id: "08073500", name: "Greens Bayou near Houston", lat: 29.85, lon: -95.25 },
+                { id: "08068000", name: "San Jacinto River near Sheldon", lat: 29.87, lon: -95.13 },
+                { id: "08068500", name: "East Fork San Jacinto near New Caney", lat: 30.15, lon: -95.20 }
+            ];
+            
+            fallbackGauges.forEach(function(gauge) {
+                addGaugeMarker(gauge.id, gauge.name, gauge.lat, gauge.lon);
+            });
+        }
+
+        function getFloodColor(level, siteId) {
+            var thresholds = floodLevels[siteId] || floodLevels.default;
+            
+            if (level >= thresholds.record) return '#8e44ad';
+            if (level >= thresholds.major) return '#c0392b';
+            if (level >= thresholds.moderate) return '#e74c3c';
+            if (level >= thresholds.warning) return '#e67e22';
+            if (level >= thresholds.action) return '#f39c12';
+            return '#2ecc71';
+        }
+
+        function addGaugeMarker(siteId, name, lat, lon) {
+            var currentLevel = currentLevels[siteId] || 15;
+            var floodColor = getFloodColor(currentLevel, siteId);
+            
+            var marker = L.circleMarker([lat, lon], {
+                radius: 10,
+                fillColor: floodColor,
+                color: "#000",
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.9
+            }).addTo(map);
+
+            var thresholds = floodLevels[siteId] || floodLevels.default;
+            
+            marker.bindPopup(
+                "<strong>" + name + "</strong><br>" +
+                "Site ID: " + siteId + "<br>" +
+                "<strong style='color:" + floodColor + ";'>Current Level: " + currentLevel.toFixed(1) + " ft</strong><br>" +
+                "------------------------<br>" +
+                "<span style='color: #f39c12;'>Action: " + thresholds.action + " ft</span><br>" +
+                "<span style='color: #e67e22;'>Warning: " + thresholds.warning + " ft</span><br>" +
+                "<span style='color: #e74c3c;'>Moderate: " + thresholds.moderate + " ft</span><br>" +
+                "<span style='color: #c0392b;'>Major: " + thresholds.major + " ft</span><br>" +
+                "<span style='color: #8e44ad;'>Record: " + thresholds.record + " ft</span><br>" +
+                "------------------------<br>" +
+                "<button onclick='loadTimeSeries(\"" + siteId + "\", \"" + name.replace(/"/g, '&quot;') + "\")' style='padding:5px 10px; background:#3498db; color:white; border:none; border-radius:3px; cursor:pointer;'>📈 View Time Series</button>"
+            );
+
+            marker.on("click", function() {
+                loadTimeSeries(siteId, name);
+            });
+        }
+
+        function loadTimeSeries(siteId, name) {
+            document.getElementById("chartTitle").innerHTML = 
+                "River Level – " + name;
+
+            // Sample time series data for demo
+            var now = new Date();
+            var labels = [];
+            var data = [];
+            
+            // Generate last 24 hours of data
+            for (var i = 24; i >= 0; i--) {
+                var time = new Date(now - i * 3600000);
+                labels.push(time.getHours() + ":00");
+                
+                // Generate realistic looking data based on site
+                var baseLevel = currentLevels[siteId] || 15;
+                var variation = Math.sin(i / 5) * 2 + Math.random();
+                data.push(baseLevel + variation);
+            }
+
+            drawChartWithFloodLevels(labels, data, siteId, currentLevels[siteId] || 15, name);
+        }
+
+        function drawChartWithFloodLevels(labels, data, siteId, latestLevel, name) {
+            var ctx = document.getElementById("riverChart").getContext("2d");
+            var thresholds = floodLevels[siteId] || floodLevels.default;
+
+            if (currentChart) {
+                currentChart.destroy();
+            }
+
+            currentChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: "Water Level (ft)",
+                            data: data,
+                            borderColor: "rgb(59, 130, 246)",
+                            backgroundColor: "rgba(59, 130, 246, 0.1)",
+                            tension: 0.3,
+                            fill: true,
+                            pointBackgroundColor: data.map(function(level) {
+                                if (level >= thresholds.record) return '#8e44ad';
+                                if (level >= thresholds.major) return '#c0392b';
+                                if (level >= thresholds.moderate) return '#e74c3c';
+                                if (level >= thresholds.warning) return '#e67e22';
+                                if (level >= thresholds.action) return '#f39c12';
+                                return '#2ecc71';
+                            }),
+                            pointRadius: 4,
+                            pointHoverRadius: 6
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    var level = context.raw;
+                                    var status = 'Normal';
+                                    
+                                    if (level >= thresholds.record) status = 'RECORD LEVEL!';
+                                    else if (level >= thresholds.major) status = 'MAJOR FLOOD';
+                                    else if (level >= thresholds.moderate) status = 'Moderate Flood';
+                                    else if (level >= thresholds.warning) status = 'Warning Stage';
+                                    else if (level >= thresholds.action) status = 'Action Stage';
+                                    
+                                    return 'Level: ' + level.toFixed(1) + ' ft (' + status + ')';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            title: {
+                                display: true,
+                                text: "Water Level (feet)"
+                            },
+                            grid: {
+                                color: function(context) {
+                                    var value = context.tick.value;
+                                    if (value >= thresholds.record) return '#8e44ad80';
+                                    if (value >= thresholds.major) return '#c0392b80';
+                                    if (value >= thresholds.moderate) return '#e74c3c80';
+                                    if (value >= thresholds.warning) return '#e67e2280';
+                                    if (value >= thresholds.action) return '#f39c1280';
+                                    return '#e0e0e0';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Update title with flood status
+            var floodStatus = 'Normal';
+            var statusColor = '#2ecc71';
+            
+            if (latestLevel >= thresholds.record) {
+                floodStatus = 'RECORD FLOOD!';
+                statusColor = '#8e44ad';
+            } else if (latestLevel >= thresholds.major) {
+                floodStatus = 'MAJOR FLOOD';
+                statusColor = '#c0392b';
+            } else if (latestLevel >= thresholds.moderate) {
+                floodStatus = 'MODERATE FLOOD';
+                statusColor = '#e74c3c';
+            } else if (latestLevel >= thresholds.warning) {
+                floodStatus = 'WARNING STAGE';
+                statusColor = '#e67e22';
+            } else if (latestLevel >= thresholds.action) {
+                floodStatus = 'ACTION STAGE';
+                statusColor = '#f39c12';
+            }
+            
+            document.getElementById("chartTitle").innerHTML = 
+                "River Level – " + name + " <span style='color:" + statusColor + "; font-weight:bold;'>(" + floodStatus + " - " + latestLevel.toFixed(1) + " ft)</span>";
+        }
+    </script>
+    <!-- Make loadTimeSeries globally available for button clicks -->
+    <script>
+        window.loadTimeSeries = loadTimeSeries;
+    </script>
+</body>
+
+</html>
