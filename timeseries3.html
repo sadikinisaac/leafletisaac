@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Italian Flood Risk - River Network Navigator</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #app {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #map {
+            flex: 1;
+            min-height: 0;
+        }
+
+        #chartContainer {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chartInner {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+        }
+
+        #chartTitle {
+            margin: 0 0 8px 0;
+        }
+
+        #chartWrapper {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+        }
+        
+        .flood-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .flood-normal { background-color: #2ecc71; }
+        .flood-action { background-color: #f39c12; }
+        .flood-warning { background-color: #e67e22; }
+        .flood-moderate { background-color: #e74c3c; }
+        .flood-major { background-color: #c0392b; }
+        .flood-record { background-color: #8e44ad; }
+        
+        .upstream-marker {
+            background-color: #27ae60;
+            color: white;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        
+        .downstream-marker {
+            background-color: #e67e22;
+            color: white;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        
+        .river-name-marker {
+            background-color: #3498db;
+            color: white;
+            font-weight: bold;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        
+        .arrow-marker {
+            font-size: 24px;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        }
+        
+        .italy-selector {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        
+        .river-button {
+            margin: 5px;
+            padding: 8px 12px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .river-button:hover {
+            background: #2980b9;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div id="map">
+            <!-- Italy River Selector -->
+            <div class="italy-selector">
+                <strong>🇮🇹 Italian Rivers</strong><br>
+                <button class="river-button" onclick="loadRiver('po')">Po River</button>
+                <button class="river-button" onclick="loadRiver('tevere')">Tevere (Tiber)</button>
+                <button class="river-button" onclick="loadRiver('arno')">Arno River</button>
+                <button class="river-button" onclick="loadRiver('calabria')">Calabria Region</button>
+            </div>
+        </div>
+
+        <div id="chartContainer">
+            <div id="chartInner">
+                <h3 id="chartTitle">Select an Italian river gauge</h3>
+                <div id="floodLegend" style="margin-bottom: 10px; font-size: 12px;">
+                    <span><span class="flood-indicator flood-normal"></span>Normal</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-action"></span>Action</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-warning"></span>Warning</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-moderate"></span>Moderate</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-major"></span>Major</span>
+                    <span style="margin-left: 10px;"><span class="flood-indicator flood-record"></span>Record</span>
+                </div>
+                <div style="margin-bottom: 5px; font-size: 11px; color: #666;">
+                    <span style="color: #27ae60;">⬆️ UPSTREAM (Source)</span> → 
+                    <span style="color: #3498db;">FLOW DIRECTION</span> → 
+                    <span style="color: #e67e22;">⬇️ DOWNSTREAM (Sea)</span>
+                </div>
+                <div id="chartWrapper">
+                    <canvas id="riverChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Map setup
+        var map = L.map("map").setView([43.5, 11.5], 6); // Center on Italy
+        
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "OpenStreetMap"
+        }).addTo(map);
+
+        var currentChart = null;
+
+        // Italian river networks with real upstream/downstream data
+        var italianRivers = {
+            po: {
+                name: "Po River",
+                source: [44.7, 7.1], // Monviso, Alps
+                mouth: [44.97, 12.28], // Adriatic Sea
+                color: "#3498db",
+                points: [
+                    [44.7, 7.1],   // Source (Upstream)
+                    [44.9, 8.2],
+                    [45.0, 9.0],
+                    [45.1, 9.8],
+                    [45.0, 10.5],
+                    [44.9, 11.3],
+                    [44.8, 12.0],
+                    [44.97, 12.28] // Mouth (Downstream)
+                ],
+                gauges: [
+                    { id: "P01", name: "Po at Turin", lat: 45.07, lon: 7.68, action: 4.5, warning: 6.0, moderate: 7.5, major: 9.0, record: 10.8 },
+                    { id: "P02", name: "Po at Piacenza", lat: 45.05, lon: 9.70, action: 5.0, warning: 6.5, moderate: 8.0, major: 9.5, record: 11.2 },
+                    { id: "P03", name: "Po at Ferrara", lat: 44.84, lon: 11.62, action: 5.5, warning: 7.0, moderate: 8.5, major: 10.0, record: 11.8 }
+                ]
+            },
+            tevere: {
+                name: "Tevere (Tiber)",
+                source: [43.8, 12.1], // Mount Fumaiolo
+                mouth: [41.73, 12.28], // Ostia, Rome
+                color: "#e67e22",
+                points: [
+                    [43.8, 12.1],  // Source
+                    [43.5, 12.2],
+                    [43.0, 12.3],
+                    [42.5, 12.4],
+                    [42.0, 12.4],
+                    [41.9, 12.4],
+                    [41.73, 12.28] // Mouth
+                ],
+                gauges: [
+                    { id: "T01", name: "Tevere at Rome", lat: 41.89, lon: 12.48, action: 10.0, warning: 12.0, moderate: 14.0, major: 16.0, record: 19.5 }
+                ]
+            },
+            arno: {
+                name: "Arno River",
+                source: [43.85, 11.65], // Mount Falterona
+                mouth: [43.68, 10.28], // Pisa
+                color: "#2ecc71",
+                points: [
+                    [43.85, 11.65], // Source
+                    [43.80, 11.40],
+                    [43.77, 11.20],
+                    [43.73, 10.95],
+                    [43.70, 10.65],
+                    [43.68, 10.28]  // Mouth
+                ],
+                gauges: [
+                    { id: "A01", name: "Arno at Florence", lat: 43.77, lon: 11.25, action: 4.0, warning: 5.5, moderate: 7.0, major: 8.5, record: 11.5 },
+                    { id: "A02", name: "Arno at Pisa", lat: 43.71, lon: 10.40, action: 3.5, warning: 5.0, moderate: 6.5, major: 8.0, record: 10.2 }
+                ]
+            },
+            calabria: {
+                name: "Calabria Rivers",
+                color: "#9b59b6",
+                points: [
+                    // Based on SCIBA study area [citation:2]
+                    [38.25, 15.78], // Scilla area
+                    [38.22, 15.80],
+                    [38.20, 15.82],
+                    [38.18, 15.85],
+                    [38.15, 15.88]  // Bagnara area
+                ],
+                gauges: [
+                    { id: "C01", name: "Scilla Torrent", lat: 38.25, lon: 15.78, action: 2.5, warning: 3.5, moderate: 4.5, major: 5.5, record: 7.2 },
+                    { id: "C02", name: "Bagnara Creek", lat: 38.18, lon: 15.85, action: 2.0, warning: 3.0, moderate: 4.0, major: 5.0, record: 6.8 }
+                ]
+            }
+        };
+
+        // Current water levels (sample data)
+        var currentLevels = {
+            "P01": 4.2,  // Normal
+            "P02": 5.8,  // Action
+            "P03": 7.2,  // Warning
+            "T01": 11.5, // Action
+            "A01": 6.8,  // Warning
+            "A02": 4.2,  // Normal
+            "C01": 3.8,  // Warning
+            "C02": 3.2   // Action
+        };
+
+        function loadRiver(riverKey) {
+            // Clear existing layers (except basemap)
+            map.eachLayer(function(layer) {
+                if (layer instanceof L.Polyline || layer instanceof L.CircleMarker || layer instanceof L.Marker) {
+                    map.removeLayer(layer);
+                }
+            });
+
+            var river = italianRivers[riverKey];
+            
+            // Draw river line
+            L.polyline(river.points, {
+                color: river.color,
+                weight: 4,
+                opacity: 0.8
+            }).addTo(map);
+
+            // Add river name
+            var midIndex = Math.floor(river.points.length / 2);
+            L.marker(river.points[midIndex], {
+                icon: L.divIcon({
+                    className: 'river-name-marker',
+                    html: river.name,
+                    iconSize: [120, 30],
+                    iconAnchor: [60, 15]
+                })
+            }).addTo(map);
+
+            // Add UPSTREAM label at source
+            L.marker(river.points[0], {
+                icon: L.divIcon({
+                    className: 'upstream-marker',
+                    html: '⬆️ UPSTREAM (Source)',
+                    iconSize: [150, 30],
+                    iconAnchor: [75, 15]
+                })
+            }).addTo(map);
+
+            // Add DOWNSTREAM label at mouth
+            var last = river.points.length - 1;
+            L.marker(river.points[last], {
+                icon: L.divIcon({
+                    className: 'downstream-marker',
+                    html: '⬇️ DOWNSTREAM (Mouth)',
+                    iconSize: [160, 30],
+                    iconAnchor: [80, 15]
+                })
+            }).addTo(map);
+
+            // Add flow arrows
+            for (var i = 0; i < river.points.length - 1; i++) {
+                var start = river.points[i];
+                var end = river.points[i + 1];
+                var midLat = (start[0] + end[0]) / 2;
+                var midLng = (start[1] + end[1]) / 2;
+                
+                L.marker([midLat, midLng], {
+                    icon: L.divIcon({
+                        className: 'arrow-marker',
+                        html: '➡️',
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
+                    })
+                }).addTo(map);
+            }
+
+            // Add gauges
+            river.gauges.forEach(function(gauge) {
+                addItalianGauge(gauge);
+            });
+
+            // Zoom to river
+            map.fitBounds(L.polyline(river.points).getBounds());
+        }
+
+        function addItalianGauge(gauge) {
+            var level = currentLevels[gauge.id] || 5.0;
+            var color = getItalianFloodColor(level, gauge);
+            
+            var marker = L.circleMarker([gauge.lat, gauge.lon], {
+                radius: 10,
+                fillColor: color,
+                color: "#000",
+                weight: 2,
+                fillOpacity: 0.9
+            }).addTo(map);
+
+            marker.bindPopup(
+                "<strong>" + gauge.name + "</strong><br>" +
+                "Station ID: " + gauge.id + "<br>" +
+                "<strong style='color:" + color + ";'>Current Level: " + level.toFixed(1) + " m</strong><br>" +
+                "------------------------<br>" +
+                "<span style='color: #f39c12;'>Action: " + gauge.action + " m</span><br>" +
+                "<span style='color: #e67e22;'>Warning: " + gauge.warning + " m</span><br>" +
+                "<span style='color: #e74c3c;'>Moderate: " + gauge.moderate + " m</span><br>" +
+                "<span style='color: #c0392b;'>Major: " + gauge.major + " m</span><br>" +
+                "<span style='color: #8e44ad;'>Record: " + gauge.record + " m</span><br>" +
+                "------------------------<br>" +
+                "<button onclick='loadItalianTimeSeries(\"" + gauge.id + "\", \"" + gauge.name + "\", " + 
+                JSON.stringify(gauge) + ")' style='padding:5px 10px; background:#3498db; color:white; border:none; border-radius:3px;'>📈 View Time Series</button>"
+            );
+
+            marker.on("click", function() {
+                loadItalianTimeSeries(gauge.id, gauge.name, gauge);
+            });
+        }
+
+        function getItalianFloodColor(level, gauge) {
+            if (level >= gauge.record) return '#8e44ad';
+            if (level >= gauge.major) return '#c0392b';
+            if (level >= gauge.moderate) return '#e74c3c';
+            if (level >= gauge.warning) return '#e67e22';
+            if (level >= gauge.action) return '#f39c12';
+            return '#2ecc71';
+        }
+
+        function loadItalianTimeSeries(stationId, stationName, gauge) {
+            document.getElementById("chartTitle").innerHTML = 
+                "River Level – " + stationName;
+
+            // Generate realistic time series for Italy
+            var now = new Date();
+            var labels = [];
+            var data = [];
+            var baseLevel = currentLevels[stationId] || 5.0;
+            
+            for (var i = 24; i >= 0; i--) {
+                var time = new Date(now - i * 3600000);
+                labels.push(time.getHours() + ":00");
+                
+                // Mediterranean rainfall pattern: afternoon storms
+                var hour = time.getHours();
+                var stormEffect = (hour >= 14 && hour <= 18) ? 0.8 : 0;
+                var variation = Math.sin(i / 4) * 0.5 + Math.random() * 0.3 + stormEffect;
+                data.push(baseLevel + variation);
+            }
+
+            drawItalianChart(labels, data, gauge, baseLevel, stationName);
+        }
+
+        function drawItalianChart(labels, data, gauge, latestLevel, stationName) {
+            var ctx = document.getElementById("riverChart").getContext("2d");
+
+            if (currentChart) {
+                currentChart.destroy();
+            }
+
+            currentChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Water Level (meters)",
+                        data: data,
+                        borderColor: "rgb(59, 130, 246)",
+                        backgroundColor: "rgba(59, 130, 246, 0.1)",
+                        tension: 0.3,
+                        fill: true,
+                        pointBackgroundColor: data.map(function(level) {
+                            if (level >= gauge.record) return '#8e44ad';
+                            if (level >= gauge.major) return '#c0392b';
+                            if (level >= gauge.moderate) return '#e74c3c';
+                            if (level >= gauge.warning) return '#e67e22';
+                            if (level >= gauge.action) return '#f39c12';
+                            return '#2ecc71';
+                        }),
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        annotation: {
+                            annotations: {
+                                action: {
+                                    type: 'line',
+                                    yMin: gauge.action,
+                                    yMax: gauge.action,
+                                    borderColor: '#f39c12',
+                                    borderWidth: 2,
+                                    borderDash: [5,5],
+                                    label: { content: 'Action: ' + gauge.action + 'm', enabled: true }
+                                },
+                                warning: {
+                                    type: 'line',
+                                    yMin: gauge.warning,
+                                    yMax: gauge.warning,
+                                    borderColor: '#e67e22',
+                                    borderWidth: 2,
+                                    borderDash: [5,5],
+                                    label: { content: 'Warning: ' + gauge.warning + 'm', enabled: true }
+                                },
+                                moderate: {
+                                    type: 'line',
+                                    yMin: gauge.moderate,
+                                    yMax: gauge.moderate,
+                                    borderColor: '#e74c3c',
+                                    borderWidth: 2,
+                                    borderDash: [5,5],
+                                    label: { content: 'Moderate: ' + gauge.moderate + 'm', enabled: true }
+                                },
+                                major: {
+                                    type: 'line',
+                                    yMin: gauge.major,
+                                    yMax: gauge.major,
+                                    borderColor: '#c0392b',
+                                    borderWidth: 2,
+                                    borderDash: [5,5],
+                                    label: { content: 'Major: ' + gauge.major + 'm', enabled: true }
+                                },
+                                record: {
+                                    type: 'line',
+                                    yMin: gauge.record,
+                                    yMax: gauge.record,
+                                    borderColor: '#8e44ad',
+                                    borderWidth: 2,
+                                    borderDash: [5,5],
+                                    label: { content: 'Record: ' + gauge.record + 'm', enabled: true }
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    var level = context.raw;
+                                    var status = 'Normal';
+                                    if (level >= gauge.record) status = 'RECORD!';
+                                    else if (level >= gauge.major) status = 'MAJOR FLOOD';
+                                    else if (level >= gauge.moderate) status = 'Moderate Flood';
+                                    else if (level >= gauge.warning) status = 'Warning';
+                                    else if (level >= gauge.action) status = 'Action';
+                                    return 'Level: ' + level.toFixed(2) + ' m (' + status + ')';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Update title with flood status
+            var status = 'Normal';
+            var statusColor = '#2ecc71';
+            if (latestLevel >= gauge.record) { status = 'RECORD!'; statusColor = '#8e44ad'; }
+            else if (latestLevel >= gauge.major) { status = 'MAJOR FLOOD'; statusColor = '#c0392b'; }
+            else if (latestLevel >= gauge.moderate) { status = 'MODERATE FLOOD'; statusColor = '#e74c3c'; }
+            else if (latestLevel >= gauge.warning) { status = 'WARNING'; statusColor = '#e67e22'; }
+            else if (latestLevel >= gauge.action) { status = 'ACTION'; statusColor = '#f39c12'; }
+
+            document.getElementById("chartTitle").innerHTML = 
+                "River Level – " + stationName + 
+                " <span style='color:" + statusColor + "; font-weight:bold;'>(" + status + " - " + 
+                latestLevel.toFixed(2) + " m)</span>";
+        }
+
+        // Load Po River by default
+        window.onload = function() {
+            loadRiver('po');
+        };
+    </script>
+    
+    <!-- Chart.js annotation plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.4.0/dist/chartjs-plugin-annotation.min.js"></script>
+</body>
+
+</html>
