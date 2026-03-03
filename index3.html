@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGIS JavaScript - Euclidean Distance</title>
+</head>
+<body>
+    <h1> My WebGIS JavaScript Session </h1>
+    <h2>Euclidean Distance Calculator</h2>
+
+    <script>
+        // Numbers : Calculation > +, - , *, /, %
+        let myNumber = 5;
+        const mySecondNumber = 9;
+
+        let sum = myNumber + mySecondNumber;
+        let difference = myNumber - mySecondNumber;
+        let product = myNumber * mySecondNumber;
+        let quotient = myNumber / mySecondNumber;
+        let remainder = myNumber % mySecondNumber;
+        console.log("Sum: " + sum);
+        console.log("Difference: " + difference);
+        console.log("Product: " + product);
+        console.log("Quotient: " + quotient);
+        console.log("Remainder: " + remainder);
+
+        let sumCoolResult = Math.sqrt(9) * 2;
+        console.log("Sum Cool Result: " + sumCoolResult); 
+        
+        // Math.pow function to calculate 2 to the power of 3
+        let powerResult = Math.pow(2, 3);
+        console.log("2 to the power of 3 (using Math.pow): " + powerResult);
+        
+        // Alternative method using exponentiation operator (**)
+        let powerResultAlt = 2 ** 3;
+        console.log("2 to the power of 3 (using ** operator): " + powerResultAlt);
+        
+        // EUCLIDEAN DISTANCE CALCULATIONS
+        console.log("\n--- EUCLIDEAN DISTANCE CALCULATIONS ---");
+        
+        // Example 1: 2D Distance between two points
+        // Point A (x1, y1) and Point B (x2, y2)
+        let x1 = 3, y1 = 4;
+        let x2 = 7, y2 = 1;
+        
+        // Calculate Euclidean distance: √[(x2-x1)² + (y2-y1)²]
+        let distance2D = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        console.log(`Distance between (${x1},${y1}) and (${x2},${y2}): ${distance2D}`);
+        
+        // Example 2: 3D Distance
+        // Point A (x1, y1, z1) and Point B (x2, y2, z2)
+        let x1_3d = 2, y1_3d = 3, z1_3d = 5;
+        let x2_3d = 8, y2_3d = 7, z2_3d = 1;
+        
+        // Calculate 3D Euclidean distance: √[(x2-x1)² + (y2-y1)² + (z2-z1)²]
+        let distance3D = Math.sqrt(
+            Math.pow(x2_3d - x1_3d, 2) + 
+            Math.pow(y2_3d - y1_3d, 2) + 
+            Math.pow(z2_3d - z1_3d, 2)
+        );
+        console.log(`3D Distance between (${x1_3d},${y1_3d},${z1_3d}) and (${x2_3d},${y2_3d},${z2_3d}): ${distance3D.toFixed(2)}`);
+        
+        // Example 3: Using the exponentiation operator (**) instead of Math.pow
+        let distance2D_alt = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+        console.log(`Distance (using ** operator): ${distance2D_alt}`);
+        
+        // FIX: Define the function BEFORE calling it
+        // Option 1: Function Declaration (hoisted - works anywhere)
+        function calculateEuclideanDistance(point1, point2) {
+            let dx = point2.x - point1.x;
+            let dy = point2.y - point1.y;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        
+        // Now call the function AFTER it's defined
+        // Create point objects
+        let pointA = { x: 1, y: 2 };
+        let pointB = { x: 4, y: 6 };
+        
+        let distance = calculateEuclideanDistance(pointA, pointB);
+        console.log(`Distance using function: ${distance}`);
+        
+        // Example 5: Practical GIS example - distance between two cities (simplified coordinates)
+        let city1 = { name: "New York", x: 10, y: 20 };
+        let city2 = { name: "Los Angeles", x: 35, y: 45 };
+        
+        let cityDistance = Math.sqrt((city2.x - city1.x) ** 2 + (city2.y - city1.y) ** 2);
+        console.log(`Distance between ${city1.name} and ${city2.name}: ${cityDistance.toFixed(2)} units`);
+
+
+        // Find midpoint between two points
+        let point1 = { x: 2, y: 3 };
+        let point2 = { x: 8, y: 7 };
+
+        // Midpoint formula: ((x1 + x2)/2, (y1 + y2)/2)
+        let midpointX = (point1.x + point2.x) / 2;
+        let midpointY = (point1.y + point2.y) / 2;
+
+        console.log(`Point 1: (${point1.x}, ${point1.y})`);
+        console.log(`Point 2: (${point2.x}, ${point2.y})`);
+        console.log(`Midpoint: (${midpointX}, ${midpointY})`);
+
+    </script>
+</body>
+</html>
